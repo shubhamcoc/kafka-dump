@@ -131,7 +131,7 @@ func (p *ParquetReader) ReadOffset(doneChan chan int) chan kafka.ConsumerGroupTo
 					counter++
 					log.Infof("offset message is: %v", offsetMessage)
 					ch <- offsetMessage
-					log.Infof("Loaded %f% (%d/%d)", counter/rowNum, counter, rowNum)
+					log.Infof("Loaded %f: (%d/%d)", counter/rowNum, counter, rowNum)
 				}
 			}
 			p.parquetReaderOffset.ReadStop()

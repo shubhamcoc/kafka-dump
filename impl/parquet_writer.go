@@ -28,7 +28,6 @@ func NewParquetWriter(fileWriterMessage, fileWriterOffset source.ParquetFile) (*
 	if err != nil {
 		return nil, errors.Wrap(err, "[NewParquetWriter]")
 	}
-
 	return &ParquetWriter{
 		fileWriterMessage:    fileWriterMessage,
 		parquetWriterMessage: parquetWriterMessage,
@@ -85,7 +84,7 @@ func (f *ParquetWriter) Write(msg kafka.Message) (err error) {
 		Timestamp:     msg.Timestamp.Format(time.RFC3339),
 		TimestampType: msg.TimestampType.String(),
 	}
-
+	log.Info("write kafka message")
 	err = f.parquetWriterMessage.Write(message)
 	if err != nil {
 		return errors.Wrap(err, "[parquetWriter.Write]")
@@ -103,7 +102,6 @@ func (f *ParquetWriter) OffsetWrite(msg kafkaOffsetMessage) (err error) {
 			WatermarkOffsetLow:  partition.WOL,
 			WatermarkOffsetHigh: partition.WOH,
 		}
-
 		err = f.parquetWriterOffset.Write(message)
 		if err != nil {
 			return errors.Wrap(err, "[parquetWriter.Write]")
@@ -114,7 +112,8 @@ func (f *ParquetWriter) OffsetWrite(msg kafkaOffsetMessage) (err error) {
 }
 
 func (f *ParquetWriter) Flush() error {
-	err := f.parquetWriterMessage.WriteStop()
+	var err error
+	err = f.parquetWriterMessage.WriteStop()
 	if err != nil {
 		return errors.Wrap(err, "[parquetWriterMessage.WriteStop()]")
 	}

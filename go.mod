@@ -4,6 +4,7 @@ go 1.18
 
 require (
 	cloud.google.com/go/storage v1.29.0
+	github.com/acomagu/bufpipe v1.0.4
 	github.com/confluentinc/confluent-kafka-go/v2 v2.2.0
 	github.com/minio/minio-go/v7 v7.0.63
 	github.com/pkg/errors v0.9.1

@@ -13,20 +13,24 @@ import (
 )
 
 type Exporter struct {
-	admin    *kafka.AdminClient
-	consumer *kafka.Consumer
-	topics   []string
-	writer   Writer
-	options  *Options
+	admin             *kafka.AdminClient
+	consumer          *kafka.Consumer
+	topics            []string
+	writer            Writer
+	options           *Options
+	messageStatusChan chan int
+	offsetStatusChan  chan int
 }
 
-func NewExporter(adminClient *kafka.AdminClient, consumer *kafka.Consumer, topics []string, writer Writer, options *Options) (*Exporter, error) {
+func NewExporter(adminClient *kafka.AdminClient, consumer *kafka.Consumer, topics []string, writer Writer, options *Options, msgStatusChan, offsetStatusChan chan int) (*Exporter, error) {
 	return &Exporter{
-		admin:    adminClient,
-		consumer: consumer,
-		topics:   topics,
-		writer:   writer,
-		options:  options,
+		admin:             adminClient,
+		consumer:          consumer,
+		topics:            topics,
+		writer:            writer,
+		options:           options,
+		messageStatusChan: msgStatusChan,
+		offsetStatusChan:  offsetStatusChan,
 	}, nil
 }
 
@@ -64,6 +68,9 @@ func (e *Exporter) Run() (exportedCount uint64, err error) {
 		if err != nil {
 			panic(err)
 		}
+		log.Infof("writing data to channel")
+		e.messageStatusChan <- 1
+		e.offsetStatusChan <- 1
 	}()
 	maxWaitingTimeForNewMessage := defaultMaxWaitingTimeForNewMessage
 	if e.options.MaxWaitingTimeForNewMessage != nil {

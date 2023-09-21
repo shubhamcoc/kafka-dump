@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/acomagu/bufpipe"
 	"github.com/huantt/kafka-dump/impl"
 	"github.com/huantt/kafka-dump/pkg/gcs_utils"
 	"github.com/huantt/kafka-dump/pkg/kafka_utils"
@@ -15,7 +16,6 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/xitongsys/parquet-go-source/gcs"
 	"github.com/xitongsys/parquet-go-source/local"
-	"github.com/xitongsys/parquet-go-source/minio"
 	"github.com/xitongsys/parquet-go/source"
 )
 
@@ -94,6 +94,17 @@ func CreateExportCommand() (*cobra.Command, error) {
 							outputFilePath = fmt.Sprintf("%s.%d", messageFilePath, time.Now().UnixMilli())
 						}
 						log.Infof("[Worker-%d] Exporting to: %s", workerID, outputFilePath)
+						msc := make(chan int)
+						osc := make(chan int)
+						s3conf := s3_utils.Config{
+							Endpoint:         s3endpoint,
+							AccessKeyID:      s3AccessKeyID,
+							SecretAccessKey:  s3SecretAccessKey,
+							UseSSL:           s3SSL,
+							BucketName:       bucketName,
+							S3CaCertLocation: s3CaCertLocation,
+						}
+						messagepr, messagepw := bufpipe.New(nil)
 						messageFileWriter, err := createParquetFileWriter(
 							Storage(storageType),
 							outputFilePath,
@@ -109,15 +120,18 @@ func CreateExportCommand() (*cobra.Command, error) {
 								UseSSL:           s3SSL,
 								BucketName:       bucketName,
 								S3CaCertLocation: s3CaCertLocation,
+								StatusChan:       msc,
 							},
+							messagepr,
+							messagepw,
 						)
 						if err != nil {
 							panic(errors.Wrap(err, "[NewLocalFileWriter]"))
 						}
-						offsetsFilePath := offsetFilePath
+						offsetpr, offsetpw := bufpipe.New(nil)
 						offsetFileWriter, err := createParquetFileWriter(
 							Storage(storageType),
-							offsetsFilePath,
+							offsetFilePath,
 							gcs_utils.Config{
 								ProjectId:       gcsProjectID,
 								BucketName:      gcsBucketName,
@@ -130,16 +144,29 @@ func CreateExportCommand() (*cobra.Command, error) {
 								UseSSL:           s3SSL,
 								BucketName:       bucketName,
 								S3CaCertLocation: s3CaCertLocation,
+								StatusChan:       osc,
 							},
+							offsetpr,
+							offsetpw,
 						)
 						if err != nil {
 							panic(errors.Wrap(err, "[NewLocalFileWriter]"))
 						}
+						logger := log.WithContext(context.Background())
+						s3Client, err := s3_utils.NewS3Client(logger, s3conf)
+						if err != nil {
+							panic(errors.Wrap(err, "Unable to init s3 client"))
+						}
+						wg.Add(2)
+						go s3_utils.PutObejct(s3Client, bucketName, outputFilePath, messagepr, msc)
+						go s3_utils.PutObejct(s3Client, bucketName, offsetFilePath, offsetpr, osc)
+						log.Infof("creating parquet writer")
 						parquetWriter, err := impl.NewParquetWriter(*messageFileWriter, *offsetFileWriter)
 						if err != nil {
 							panic(errors.Wrap(err, "Unable to init parquet file writer"))
 						}
-						exporter, err := impl.NewExporter(adminClient, consumer, *topics, parquetWriter, options)
+						log.Infof("creating parquet exporter")
+						exporter, err := impl.NewExporter(adminClient, consumer, *topics, parquetWriter, options, msc, osc)
 						if err != nil {
 							panic(errors.Wrap(err, "Failed to init exporter"))
 						}
@@ -209,7 +236,7 @@ const (
 	StorageS3                 Storage = "s3"
 )
 
-func createParquetFileWriter(storage Storage, filePath string, gcsConfig gcs_utils.Config, s3Config s3_utils.Config) (*source.ParquetFile, error) {
+func createParquetFileWriter(storage Storage, filePath string, gcsConfig gcs_utils.Config, s3Config s3_utils.Config, pr *bufpipe.PipeReader, pw *bufpipe.PipeWriter) (*source.ParquetFile, error) {
 	switch storage {
 	case StorageLocalFile:
 		fw, err := local.NewLocalFileWriter(filePath)
@@ -233,13 +260,9 @@ func createParquetFileWriter(storage Storage, filePath string, gcsConfig gcs_uti
 		}
 		return &fw, nil
 	case StorageS3:
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		s3Client, err := s3_utils.NewS3Client(s3Config)
-		if err != nil {
-			panic(errors.Wrap(err, "Unable to init s3 client"))
-		}
-		fileWriter, err := minio.NewS3FileWriterWithClient(ctx, s3Client.Client, s3Config.BucketName, filePath)
+		fileWriter, err := s3_utils.NewS3FileWriterWithClient(ctx, s3Config.BucketName, filePath, pr, pw)
 		if err != nil {
 			return nil, errors.Wrap(err, "[NewS3FileWriterWithClient]")
 		}

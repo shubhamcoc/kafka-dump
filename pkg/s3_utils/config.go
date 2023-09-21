@@ -7,4 +7,5 @@ type Config struct {
 	SecretAccessKey  string
 	S3CaCertLocation string
 	UseSSL           bool
+	StatusChan       chan int
 }
