@@ -10,10 +10,12 @@ import (
 	"github.com/huantt/kafka-dump/pkg/gcs_utils"
 	"github.com/huantt/kafka-dump/pkg/kafka_utils"
 	"github.com/huantt/kafka-dump/pkg/log"
+	"github.com/huantt/kafka-dump/pkg/s3_utils"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 	"github.com/xitongsys/parquet-go-source/gcs"
 	"github.com/xitongsys/parquet-go-source/local"
+	"github.com/xitongsys/parquet-go-source/minio"
 	"github.com/xitongsys/parquet-go/source"
 )
 
@@ -41,6 +43,12 @@ func CreateExportCommand() (*cobra.Command, error) {
 	var sslCertLocation string
 	var sslKeyLocation string
 	var enableAutoOffsetStore bool
+	var s3endpoint string
+	var s3AccessKeyID string
+	var s3SecretAccessKey string
+	var bucketName string
+	var s3CaCertLocation string
+	var s3SSL bool
 
 	command := cobra.Command{
 		Use: "export",
@@ -68,6 +76,7 @@ func CreateExportCommand() (*cobra.Command, error) {
 			if err != nil {
 				panic(errors.Wrap(err, "Unable to init consumer"))
 			}
+
 			maxWaitingTimeForNewMessage := time.Duration(maxWaitingSecondsForNewMessage) * time.Second
 			options := &impl.Options{
 				Limit:                       exportLimitPerFile,
@@ -93,6 +102,14 @@ func CreateExportCommand() (*cobra.Command, error) {
 								BucketName:      gcsBucketName,
 								CredentialsFile: googleCredentialsFile,
 							},
+							s3_utils.Config{
+								Endpoint:         s3endpoint,
+								AccessKeyID:      s3AccessKeyID,
+								SecretAccessKey:  s3SecretAccessKey,
+								UseSSL:           s3SSL,
+								BucketName:       bucketName,
+								S3CaCertLocation: s3CaCertLocation,
+							},
 						)
 						if err != nil {
 							panic(errors.Wrap(err, "[NewLocalFileWriter]"))
@@ -105,6 +122,14 @@ func CreateExportCommand() (*cobra.Command, error) {
 								ProjectId:       gcsProjectID,
 								BucketName:      gcsBucketName,
 								CredentialsFile: googleCredentialsFile,
+							},
+							s3_utils.Config{
+								Endpoint:         s3endpoint,
+								AccessKeyID:      s3AccessKeyID,
+								SecretAccessKey:  s3SecretAccessKey,
+								UseSSL:           s3SSL,
+								BucketName:       bucketName,
+								S3CaCertLocation: s3CaCertLocation,
 							},
 						)
 						if err != nil {
@@ -151,6 +176,12 @@ func CreateExportCommand() (*cobra.Command, error) {
 	command.Flags().BoolVar(&enableAutoOffsetStore, "enable-auto-offset-store", true, "To store offset in kafka broker")
 	command.Flags().StringVar(&kafkaSecurityProtocol, "kafka-security-protocol", "", "Kafka security protocol")
 	command.Flags().StringVar(&kafkaGroupID, "kafka-group-id", "", "Kafka consumer group ID")
+	command.Flags().StringVar(&s3endpoint, "endpoint", "", "Endpoint to connect to S3")
+	command.Flags().StringVar(&s3AccessKeyID, "accesskeyid", "", "Access Key of S3 instance")
+	command.Flags().StringVar(&s3SecretAccessKey, "secretaccesskey", "", "Secret Key of S3 instance")
+	command.Flags().StringVar(&bucketName, "bucket", "", "Bucket name to connect to s3 bucket")
+	command.Flags().StringVar(&s3CaCertLocation, "ca-cert", "", "ca cert location to connect to s3 bucket")
+	command.Flags().BoolVar(&s3SSL, "ssl", true, "Enable SSL for s3 connection")
 	command.Flags().Uint64Var(&exportLimitPerFile, "limit", 0, "Supports file splitting. Files are split by the number of messages specified")
 	command.Flags().IntVar(&maxWaitingSecondsForNewMessage, "max-waiting-seconds-for-new-message", 30, "Max waiting seconds for new message, then this process will be marked as finish. Set -1 to wait forever.")
 	command.Flags().IntVar(&concurrentConsumers, "concurrent-consumers", 1, "Number of concurrent consumers")
@@ -175,9 +206,10 @@ type Storage string
 const (
 	StorageLocalFile          Storage = "file"
 	StorageGoogleCloudStorage Storage = "gcs"
+	StorageS3                 Storage = "s3"
 )
 
-func createParquetFileWriter(storage Storage, filePath string, gcsConfig gcs_utils.Config) (*source.ParquetFile, error) {
+func createParquetFileWriter(storage Storage, filePath string, gcsConfig gcs_utils.Config, s3Config s3_utils.Config) (*source.ParquetFile, error) {
 	switch storage {
 	case StorageLocalFile:
 		fw, err := local.NewLocalFileWriter(filePath)
@@ -191,11 +223,27 @@ func createParquetFileWriter(storage Storage, filePath string, gcsConfig gcs_uti
 		if err != nil {
 			return nil, errors.Wrap(err, "Failed to create Singleton GCS client")
 		}
-		fw, err := gcs.NewGcsFileWriterWithClient(ctx, client, gcsConfig.ProjectId, gcsConfig.BucketName, filePath)
+		gcsFile, err := gcs.NewGcsFileWriterWithClient(ctx, client, gcsConfig.ProjectId, gcsConfig.BucketName, filePath)
 		if err != nil {
 			return nil, errors.Wrap(err, "[NewGcsFileWriterWithClient]")
 		}
+		fw, err := gcsFile.Open(filePath)
+		if err != nil {
+			return nil, errors.Wrap(err, "[GcsFile.Open]")
+		}
 		return &fw, nil
+	case StorageS3:
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		s3Client, err := s3_utils.NewS3Client(s3Config)
+		if err != nil {
+			panic(errors.Wrap(err, "Unable to init s3 client"))
+		}
+		fileWriter, err := minio.NewS3FileWriterWithClient(ctx, s3Client.Client, s3Config.BucketName, filePath)
+		if err != nil {
+			return nil, errors.Wrap(err, "[NewS3FileWriterWithClient]")
+		}
+		return &fileWriter, nil
 	default:
 		return nil, errors.New(fmt.Sprintf("Storage type must be either file or gcs. Got %s", storage))
 	}
