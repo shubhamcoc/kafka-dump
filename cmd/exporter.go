@@ -158,8 +158,8 @@ func CreateExportCommand() (*cobra.Command, error) {
 							panic(errors.Wrap(err, "Unable to init s3 client"))
 						}
 						wg.Add(2)
-						go s3_utils.PutObejct(s3Client, bucketName, outputFilePath, messagepr, msc)
-						go s3_utils.PutObejct(s3Client, bucketName, offsetFilePath, offsetpr, osc)
+						go s3_utils.PutObejct(s3Client, bucketName, outputFilePath, messagepr, msc, &wg)
+						go s3_utils.PutObejct(s3Client, bucketName, offsetFilePath, offsetpr, osc, &wg)
 						log.Infof("creating parquet writer")
 						parquetWriter, err := impl.NewParquetWriter(*messageFileWriter, *offsetFileWriter)
 						if err != nil {

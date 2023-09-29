@@ -84,7 +84,6 @@ func (f *ParquetWriter) Write(msg kafka.Message) (err error) {
 		Timestamp:     msg.Timestamp.Format(time.RFC3339),
 		TimestampType: msg.TimestampType.String(),
 	}
-	log.Info("write kafka message")
 	err = f.parquetWriterMessage.Write(message)
 	if err != nil {
 		return errors.Wrap(err, "[parquetWriter.Write]")

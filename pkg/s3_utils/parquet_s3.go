@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sync"
 
 	"github.com/acomagu/bufpipe"
 	"github.com/huantt/kafka-dump/pkg/log"
@@ -181,7 +182,8 @@ func (s *MinioFile) Create(key string) (source.ParquetFile, error) {
 	return pf, nil
 }
 
-func PutObejct(client *minio.Client, bucketName, key string, reader *bufpipe.PipeReader, statusChan chan int) error {
+func PutObejct(client *minio.Client, bucketName, key string, reader *bufpipe.PipeReader, statusChan chan int, wg *sync.WaitGroup) error {
+	defer wg.Done()
 	<-statusChan
 	log.Infof("received data")
 	ctx := context.Background()
