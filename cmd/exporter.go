@@ -53,7 +53,8 @@ func CreateExportCommand() (*cobra.Command, error) {
 	command := cobra.Command{
 		Use: "export",
 		Run: func(cmd *cobra.Command, args []string) {
-			log.Infof("Limit: %d - Concurrent consumers: %d", exportLimitPerFile, concurrentConsumers)
+			logger := log.WithContext(context.Background())
+			logger.Infof("Limit: %d - Concurrent consumers: %d", exportLimitPerFile, concurrentConsumers)
 			kafkaConsumerConfig := kafka_utils.Config{
 				BootstrapServers:      kafkaServers,
 				SecurityProtocol:      kafkaSecurityProtocol,
@@ -152,7 +153,7 @@ func CreateExportCommand() (*cobra.Command, error) {
 						if err != nil {
 							panic(errors.Wrap(err, "[NewLocalFileWriter]"))
 						}
-						logger := log.WithContext(context.Background())
+
 						s3Client, err := s3_utils.NewS3Client(logger, s3conf)
 						if err != nil {
 							panic(errors.Wrap(err, "Unable to init s3 client"))
@@ -160,12 +161,12 @@ func CreateExportCommand() (*cobra.Command, error) {
 						wg.Add(2)
 						go s3_utils.PutObejct(s3Client, bucketName, outputFilePath, messagepr, msc, &wg)
 						go s3_utils.PutObejct(s3Client, bucketName, offsetFilePath, offsetpr, osc, &wg)
-						log.Infof("creating parquet writer")
+						logger.Infof("creating parquet writer")
 						parquetWriter, err := impl.NewParquetWriter(*messageFileWriter, *offsetFileWriter)
 						if err != nil {
 							panic(errors.Wrap(err, "Unable to init parquet file writer"))
 						}
-						log.Infof("creating parquet exporter")
+						logger.Infof("creating parquet exporter")
 						exporter, err := impl.NewExporter(adminClient, consumer, *topics, parquetWriter, options, msc, osc)
 						if err != nil {
 							panic(errors.Wrap(err, "Failed to init exporter"))
@@ -175,9 +176,9 @@ func CreateExportCommand() (*cobra.Command, error) {
 						if err != nil {
 							panic(errors.Wrap(err, "Error while running exporter"))
 						}
-						log.Infof("[Worker-%d] Exported %d messages", workerID, exportedCount)
+						logger.Infof("[Worker-%d] Exported %d messages", workerID, exportedCount)
 						if exportLimitPerFile == 0 || exportedCount < exportLimitPerFile {
-							log.Infof("[Worker-%d] Finished!", workerID)
+							logger.Infof("[Worker-%d] Finished!", workerID)
 							return
 						}
 					}

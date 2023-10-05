@@ -1,12 +1,15 @@
 package impl
 
 import (
+	"context"
 	"encoding/json"
 	"strconv"
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/huantt/kafka-dump/pkg/log"
+	"github.com/huantt/kafka-dump/pkg/s3_utils"
+	"github.com/minio/minio-go/v7"
 	"github.com/pkg/errors"
 	"github.com/xitongsys/parquet-go-source/local"
 	"github.com/xitongsys/parquet-go/reader"
@@ -21,28 +24,50 @@ type ParquetReader struct {
 	includePartitionAndOffset bool
 }
 
-func NewParquetReader(filePathMessage, filePathOffset string, includePartitionAndOffset bool) (*ParquetReader, error) {
+func NewParquetReader(filePathMessage, filePathOffset, bucket string, s3Client *minio.Client, includePartitionAndOffset bool) (*ParquetReader, error) {
 	var fileReaderOffset source.ParquetFile
+	var fileReaderMessage source.ParquetFile
+	var err error
 	var parquetReaderOffset *reader.ParquetReader
-	fileReaderMessage, err := local.NewLocalFileReader(filePathMessage)
-	if err != nil {
-		return nil, errors.Wrap(err, "Failed to init file reader")
+	if s3Client != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
+		fileReaderMessage, err = s3_utils.NewS3FileReaderWithClient(ctx, s3Client, bucket, filePathMessage)
+		if err != nil {
+			return nil, errors.Wrap(err, "Failed to init parquet reader")
+		}
+	} else {
+		fileReaderMessage, err = local.NewLocalFileReader(filePathMessage)
+		if err != nil {
+			return nil, errors.Wrap(err, "Failed to init file reader")
+		}
 	}
 
 	parquetReaderMessage, err := reader.NewParquetReader(fileReaderMessage, new(KafkaMessage), 9)
 	if err != nil {
-		return nil, errors.Wrap(err, "Failed to init parquet reader")
+		return nil, errors.Wrap(err, "Failed to init parquet reader message")
 	}
 
 	if filePathOffset != "" {
-		fileReaderOffset, err = local.NewLocalFileReader(filePathOffset)
-		if err != nil {
-			return nil, errors.Wrap(err, "Failed to init file reader")
+		if s3Client != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+
+			fileReaderMessage, err = s3_utils.NewS3FileReaderWithClient(ctx, s3Client, bucket, filePathMessage)
+			if err != nil {
+				return nil, errors.Wrap(err, "Failed to init parquet reader")
+			}
+		} else {
+			fileReaderOffset, err = local.NewLocalFileReader(filePathOffset)
+			if err != nil {
+				return nil, errors.Wrap(err, "Failed to init file reader")
+			}
 		}
 
 		parquetReaderOffset, err = reader.NewParquetReader(fileReaderOffset, new(OffsetMessage), 4)
 		if err != nil {
-			return nil, errors.Wrap(err, "Failed to init parquet reader")
+			return nil, errors.Wrap(err, "Failed to init parquet reader offset")
 		}
 	}
 	return &ParquetReader{

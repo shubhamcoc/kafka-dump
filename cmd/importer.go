@@ -8,6 +8,8 @@ import (
 	"github.com/huantt/kafka-dump/impl"
 	"github.com/huantt/kafka-dump/pkg/kafka_utils"
 	"github.com/huantt/kafka-dump/pkg/log"
+	"github.com/huantt/kafka-dump/pkg/s3_utils"
+	"github.com/minio/minio-go/v7"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
@@ -28,16 +30,18 @@ func CreateImportCmd() (*cobra.Command, error) {
 	var clientid string
 	var restoreBefore string
 	var restoreAfter string
+	var s3endpoint string
+	var s3AccessKeyID string
+	var s3SecretAccessKey string
+	var bucketName string
+	var s3CaCertLocation string
+	var s3SSL bool
 
 	command := cobra.Command{
 		Use: "import",
 		Run: func(cmd *cobra.Command, args []string) {
 			logger := log.WithContext(context.Background())
 			logger.Infof("Input file: %s", messageFilePath)
-			parquetReader, err := impl.NewParquetReader(messageFilePath, offsetFilePath, includePartitionAndOffset)
-			if err != nil {
-				panic(errors.Wrap(err, "Unable to init parquet file reader"))
-			}
 			kafkaProducerConfig := kafka_utils.Config{
 				BootstrapServers:          kafkaServers,
 				SecurityProtocol:          kafkaSecurityProtocol,
@@ -76,6 +80,29 @@ func CreateImportCmd() (*cobra.Command, error) {
 					}
 				}
 			}()
+
+			var s3Client *minio.Client
+			if s3endpoint != "" {
+				s3conf := s3_utils.Config{
+					Endpoint:         s3endpoint,
+					AccessKeyID:      s3AccessKeyID,
+					SecretAccessKey:  s3SecretAccessKey,
+					UseSSL:           s3SSL,
+					BucketName:       bucketName,
+					S3CaCertLocation: s3CaCertLocation,
+				}
+
+				s3Client, err = s3_utils.NewS3Client(logger, s3conf)
+				if err != nil {
+					panic(errors.Wrap(err, "Unable to init s3 client"))
+				}
+			}
+
+			parquetReader, err := impl.NewParquetReader(messageFilePath, offsetFilePath, bucketName, s3Client, includePartitionAndOffset)
+			if err != nil {
+				panic(errors.Wrap(err, "Unable to init parquet file reader"))
+			}
+
 			kafkaConsumerConfig := kafka_utils.Config{
 				BootstrapServers: kafkaServers,
 				SecurityProtocol: kafkaSecurityProtocol,
@@ -113,9 +140,11 @@ func CreateImportCmd() (*cobra.Command, error) {
 	command.Flags().StringVar(&restoreBefore, "restore-before", "", "timestamp in RFC3339 format to restore data before this time")
 	command.Flags().StringVar(&restoreAfter, "restore-after", "", "timestamp in RFC3339 format to restore data after this time")
 	command.Flags().BoolVarP(&includePartitionAndOffset, "include-partition-and-offset", "i", false, "To store partition and offset of kafka message in file")
-	err := command.MarkFlagRequired("file")
-	if err != nil {
-		return nil, err
-	}
+	command.Flags().StringVar(&s3endpoint, "endpoint", "", "Endpoint to connect to S3")
+	command.Flags().StringVar(&s3AccessKeyID, "accesskeyid", "", "Access Key of S3 instance")
+	command.Flags().StringVar(&s3SecretAccessKey, "secretaccesskey", "", "Secret Key of S3 instance")
+	command.Flags().StringVar(&bucketName, "bucket", "", "Bucket name to connect to s3 bucket")
+	command.Flags().StringVar(&s3CaCertLocation, "ca-cert", "", "ca cert location to connect to s3 bucket")
+	command.Flags().BoolVar(&s3SSL, "ssl", true, "Enable SSL for s3 connection")
 	return &command, nil
 }
