@@ -140,24 +140,24 @@ func (e *Exporter) StoreConsumerGroupOffset() error {
 	for _, v := range listRes.Valid {
 		groupIds = append(groupIds, v.GroupID)
 	}
-	log.Infof("List of consumer groups is: %v", groupIds)
+	// log.Infof("List of consumer groups is: %v", groupIds)
 
 	if len(groupIds) > 0 {
 		groupRes, err := e.admin.DescribeConsumerGroups(ctx, groupIds, kafka.SetAdminRequestTimeout(5*time.Second))
 		if err != nil {
 			return errors.Wrapf(err, "unable to describe consumer groups %v", groupIds)
 		}
-		log.Infof("group result is: %v", groupRes)
+		// log.Infof("group result is: %v", groupRes)
 
 		// TODO: improve the complexity
 		for _, groupDescription := range groupRes.ConsumerGroupDescriptions {
-			log.Infof("group description is: %v", groupDescription)
+			// log.Infof("group description is: %v", groupDescription)
 			for _, member := range groupDescription.Members {
-				log.Infof("member is: %v", member)
+				// log.Infof("member is: %v", member)
 				for _, groupTopic := range member.Assignment.TopicPartitions {
-					log.Infof("group topic is: %s", *groupTopic.Topic)
+					// log.Infof("group topic is: %s", *groupTopic.Topic)
 					for _, topic := range e.topics {
-						log.Infof("topic is: %s", topic)
+						// log.Infof("topic is: %s", topic)
 						// Matching the topic with the provided topic
 						// as we don't want to store offset for all the
 						// consumer group
@@ -182,7 +182,7 @@ func (e *Exporter) StoreConsumerGroupOffset() error {
 		}
 		log.Debugf("metadata is: %v", metadata)
 		topicMetadata := metadata.Topics[topic]
-		log.Infof("topic metadata is: %v", topicMetadata)
+		// log.Infof("topic metadata is: %v", topicMetadata)
 		topicPartition := topicMetadata.Partitions
 		for _, partition := range topicPartition {
 			log.Debugf("partition id is: %v", partition.ID)
@@ -218,16 +218,17 @@ func (e *Exporter) StoreConsumerGroupOffset() error {
 				store.TopicPartition = partition
 				kafkaTopicPartitionsForFinal = append(kafkaTopicPartitionsForFinal, store)
 			}
-			log.Infof("kafkaTopicPartitionsForFinal is: %v", kafkaTopicPartitionsForFinal)
-			l := len(kafkaTopicPartitionsForFinal)
-			log.Infof("length of kafkaTopicPartitionsForFinal is: %d", l)
+			// log.Infof("kafkaTopicPartitionsForFinal is: %v", kafkaTopicPartitionsForFinal)
+			// l := len(kafkaTopicPartitionsForFinal)
+			// log.Infof("length of kafkaTopicPartitionsForFinal is: %d", l)
+
 			// required to fetch the current offset of the consumer group
 			groupTopicPartition := kafka.ConsumerGroupTopicPartitions{
 				Group:      k,
 				Partitions: kafkaTopicPartitions,
 			}
 			groupTopicPartitions = append(groupTopicPartitions, groupTopicPartition)
-			log.Infof("groupTopicPartitions is: %v", groupTopicPartitions)
+			// log.Infof("groupTopicPartitions is: %v", groupTopicPartitions)
 			lcgor, err := e.admin.ListConsumerGroupOffsets(ctx, groupTopicPartitions, kafka.SetAdminRequireStableOffsets(false))
 			if err != nil {
 				return errors.Wrapf(err, "unable to list consumer groups offsets %v", groupTopicPartitions)
@@ -235,20 +236,20 @@ func (e *Exporter) StoreConsumerGroupOffset() error {
 			var finalRes kafkaOffsetMessage
 			// matching the topic partition and updating the offset with current offset
 			for _, res := range lcgor.ConsumerGroupsTopicPartitions {
-				log.Infof("consumer group topic paritions is %v", res.String())
+				// log.Infof("consumer group topic paritions is %v", res.String())
 				finalRes.Group = res.Group
 				for i, customKafkaTopicPartition := range kafkaTopicPartitionsForFinal {
 					for _, kafkaTopicPartition := range res.Partitions {
 						if customKafkaTopicPartition.Partition == kafkaTopicPartition.Partition && *customKafkaTopicPartition.Topic == *kafkaTopicPartition.Topic {
-							log.Infof("comparing kafka topic partition: %v, %v", customKafkaTopicPartition.Partition, kafkaTopicPartition.Partition)
-							log.Infof("comparing kafka topic: %v, %v", *customKafkaTopicPartition.Topic, *kafkaTopicPartition.Topic)
+							// log.Infof("comparing kafka topic partition: %v, %v", customKafkaTopicPartition.Partition, kafkaTopicPartition.Partition)
+							// log.Infof("comparing kafka topic: %v, %v", *customKafkaTopicPartition.Topic, *kafkaTopicPartition.Topic)
 							kafkaTopicPartitionsForFinal[i].Offset = kafkaTopicPartition.Offset
 						}
 					}
 				}
-				log.Infof("final Result before substitution: %v", finalRes)
+				// log.Infof("final Result before substitution: %v", finalRes)
 				finalRes.KafkaTopicPartitions = kafkaTopicPartitionsForFinal
-				log.Infof("final Result after substitution: %v", finalRes)
+				// log.Infof("final Result after substitution: %v", finalRes)
 				err := e.writer.OffsetWrite(finalRes)
 				if err != nil {
 					return err

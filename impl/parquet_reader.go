@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
@@ -12,13 +13,16 @@ import (
 	"github.com/minio/minio-go/v7"
 	"github.com/pkg/errors"
 	"github.com/xitongsys/parquet-go-source/local"
-	"github.com/xitongsys/parquet-go/reader"
 	"github.com/xitongsys/parquet-go/source"
 )
 
+const (
+	EmptyError = "nothing to read!!!"
+)
+
 type ParquetReader struct {
-	parquetReaderMessage      *reader.ParquetReader
-	parquetReaderOffset       *reader.ParquetReader
+	parquetReaderMessage      *s3_utils.ParquetReader
+	parquetReaderOffset       *s3_utils.ParquetReader
 	fileReaderMessage         source.ParquetFile
 	fileReaderOffset          source.ParquetFile
 	includePartitionAndOffset bool
@@ -28,11 +32,9 @@ func NewParquetReader(filePathMessage, filePathOffset, bucket string, s3Client *
 	var fileReaderOffset source.ParquetFile
 	var fileReaderMessage source.ParquetFile
 	var err error
-	var parquetReaderOffset *reader.ParquetReader
+	var parquetReaderOffset *s3_utils.ParquetReader
 	if s3Client != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-
+		ctx := context.Background()
 		fileReaderMessage, err = s3_utils.NewS3FileReaderWithClient(ctx, s3Client, bucket, filePathMessage)
 		if err != nil {
 			return nil, errors.Wrap(err, "Failed to init parquet reader")
@@ -44,17 +46,15 @@ func NewParquetReader(filePathMessage, filePathOffset, bucket string, s3Client *
 		}
 	}
 
-	parquetReaderMessage, err := reader.NewParquetReader(fileReaderMessage, new(KafkaMessage), 9)
+	parquetReaderMessage, err := s3_utils.NewParquetReader(fileReaderMessage, new(KafkaMessage), 9)
 	if err != nil {
 		return nil, errors.Wrap(err, "Failed to init parquet reader message")
 	}
 
 	if filePathOffset != "" {
 		if s3Client != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-			defer cancel()
-
-			fileReaderMessage, err = s3_utils.NewS3FileReaderWithClient(ctx, s3Client, bucket, filePathMessage)
+			ctx := context.Background()
+			fileReaderOffset, err = s3_utils.NewS3FileReaderWithClient(ctx, s3Client, bucket, filePathOffset)
 			if err != nil {
 				return nil, errors.Wrap(err, "Failed to init parquet reader")
 			}
@@ -65,7 +65,7 @@ func NewParquetReader(filePathMessage, filePathOffset, bucket string, s3Client *
 			}
 		}
 
-		parquetReaderOffset, err = reader.NewParquetReader(fileReaderOffset, new(OffsetMessage), 4)
+		parquetReaderOffset, err = s3_utils.NewParquetReader(fileReaderOffset, new(OffsetMessage), 4)
 		if err != nil {
 			return nil, errors.Wrap(err, "Failed to init parquet reader offset")
 		}
@@ -82,92 +82,105 @@ func NewParquetReader(filePathMessage, filePathOffset, bucket string, s3Client *
 const batchSize = 10
 
 func (p *ParquetReader) ReadMessage(restoreBefore, restoreAfter time.Time, doneChan chan int) chan kafka.Message {
+	log.Info("In ReadMessage function")
 	ch := make(chan kafka.Message, batchSize)
 	if p.parquetReaderMessage == nil {
+		log.Infof("message reader is empty")
 		return ch
 	}
 	rowNum := int(p.parquetReaderMessage.GetNumRows())
+	log.Infof("number of rows in message file is: %d", rowNum)
 	counter := 0
-	go func() {
-		for i := 0; i < rowNum/batchSize+1; i++ {
-			kafkaMessages := make([]KafkaMessage, batchSize)
-			if err := p.parquetReaderMessage.Read(&kafkaMessages); err != nil {
-				err = errors.Wrap(err, "Failed to bulk read messages from parquet file")
-				panic(err)
-			}
-
-			for _, parquetMessage := range kafkaMessages {
-				counter++
-				message, err := toKafkaMessage(parquetMessage, p.includePartitionAndOffset, restoreBefore, restoreAfter)
-				if err != nil {
-					err = errors.Wrapf(err, "Failed to parse kafka message from parquet message")
+	go func(doneChan chan int) {
+		// wait for all the consumer group offset to be restore first, then
+		// restore the kafka messages
+		val := <-doneChan
+		if val == 0 {
+			for i := 0; i < rowNum/batchSize+1; i++ {
+				kafkaMessages := make([]KafkaMessage, batchSize)
+				if err := p.parquetReaderMessage.Read(&kafkaMessages); err != nil {
+					err = errors.Wrap(err, "Failed to bulk read messages from parquet file")
 					panic(err)
 				}
-				if message != nil {
-					ch <- *message
-					log.Infof("Loaded %f% (%d/%d)", counter/rowNum, counter, rowNum)
+
+				for _, parquetMessage := range kafkaMessages {
+					counter++
+					message, err := toKafkaMessage(parquetMessage, p.includePartitionAndOffset, restoreBefore, restoreAfter)
+					if err != nil {
+						err = errors.Wrapf(err, "Failed to parse kafka message from parquet message")
+						panic(err)
+					}
+					if message != nil {
+						ch <- *message
+						log.Infof("Loaded: (%d/%d)", counter, rowNum)
+					} else {
+						log.Warnf("message is nil")
+					}
 				}
 			}
+			p.parquetReaderMessage.ReadStop()
+			err := p.fileReaderMessage.Close()
+			if err != nil {
+				panic(errors.Wrap(err, "Failed to close fileReader"))
+			}
+			close(ch)
 		}
-		p.parquetReaderMessage.ReadStop()
-		err := p.fileReaderMessage.Close()
-		if err != nil {
-			panic(errors.Wrap(err, "Failed to close fileReader"))
-		}
-		close(ch)
-		doneChan <- 0
-		close(doneChan)
-		log.Infof("kafka message restored successfully")
-	}()
+	}(doneChan)
 	return ch
 }
 
 func (p *ParquetReader) ReadOffset(doneChan chan int) chan kafka.ConsumerGroupTopicPartitions {
-	ch := make(chan kafka.ConsumerGroupTopicPartitions, batchSize)
 	// When offset file is not given
+	ch := make(chan kafka.ConsumerGroupTopicPartitions, batchSize)
+	defer func() {
+		doneChan <- 0
+		close(ch)
+		close(doneChan)
+	}()
 	if p.parquetReaderOffset == nil {
+		log.Infof("offset reader is empty")
 		return ch
 	}
 	rowNum := int(p.parquetReaderOffset.GetNumRows())
 	counter := 0
 	// When offset file is empty
 	if rowNum == 0 {
+		log.Infof("offset file is empty")
 		return ch
 	}
-	go func(doneChan chan int) {
-		// wait for all the messages to be restore first, then
-		// restore the kafka consumer group offset
-		val := <-doneChan
-		if val == 0 {
-			for i := 0; i < rowNum/batchSize+1; i++ {
-				offsetMessages := make([]OffsetMessage, batchSize)
-				if err := p.parquetReaderOffset.Read(&offsetMessages); err != nil {
-					err = errors.Wrap(err, "Failed to bulk read messages from parquet file")
-					panic(err)
-				}
-
-				resMessages, err := toKafkaConsumerGroupTopicPartitions(offsetMessages)
-				if err != nil {
-					err = errors.Wrapf(err, "Failed to parse offset messages from offset file")
-					panic(err)
-				}
-
-				for _, offsetMessage := range resMessages {
-					counter++
-					log.Infof("offset message is: %v", offsetMessage)
-					ch <- offsetMessage
-					log.Infof("Loaded %f: (%d/%d)", counter/rowNum, counter, rowNum)
-				}
+	log.Infof("number of rows in offset file is: %d", rowNum)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < rowNum/batchSize+1; i++ {
+			offsetMessages := make([]OffsetMessage, batchSize)
+			if err := p.parquetReaderOffset.Read(&offsetMessages); err != nil {
+				err = errors.Wrap(err, "Failed to bulk read messages from parquet file")
+				panic(err)
 			}
-			p.parquetReaderOffset.ReadStop()
-			err := p.fileReaderOffset.Close()
-			if err != nil {
-				panic(errors.Wrap(err, "Failed to close fileReader"))
+
+			resMessages, err := toKafkaConsumerGroupTopicPartitions(offsetMessages)
+			if err != nil && err.Error() != EmptyError {
+				err = errors.Wrapf(err, "Failed to parse offset messages from offset file")
+				panic(err)
 			}
-			close(ch)
-			log.Infof("consumer offset restored successfully")
+
+			for _, offsetMessage := range resMessages {
+				counter++
+				log.Infof("offset message is: %v", offsetMessage)
+				ch <- offsetMessage
+				log.Infof("Loaded: (%d/%d)", counter, rowNum)
+			}
 		}
-	}(doneChan)
+		p.parquetReaderOffset.ReadStop()
+		err := p.fileReaderOffset.Close()
+		if err != nil {
+			panic(errors.Wrap(err, "Failed to close fileReader"))
+		}
+		log.Infof("consumer offset restored successfully")
+	}()
+	wg.Wait()
 	return ch
 }
 
@@ -270,7 +283,7 @@ func toKafkaConsumerGroupTopicPartitions(offsetMessages []OffsetMessage) ([]kafk
 			res = append(res, consumerGroupTopicPartition)
 		}
 	} else {
-		return res, errors.New("nothing to read!!!")
+		return res, errors.New(EmptyError)
 	}
 
 	return res, nil
@@ -298,9 +311,9 @@ func modifyOffset(OM OffsetMessage) (kafka.Offset, error) {
 
 	default:
 		off, err := strconv.Atoi(OM.Offset)
-		if off == int(OM.WatermarkOffsetHigh) {
-			return kafka.Offset(off), err
-		}
-		return kafka.Offset(off + 1), err
+		// if off == int(OM.WatermarkOffsetHigh) {
+		// 	return kafka.Offset(off), err
+		// }
+		return kafka.Offset(off), err
 	}
 }

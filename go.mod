@@ -5,6 +5,7 @@ go 1.18
 require (
 	cloud.google.com/go/storage v1.29.0
 	github.com/acomagu/bufpipe v1.0.4
+	github.com/apache/thrift v0.16.0
 	github.com/confluentinc/confluent-kafka-go/v2 v2.2.0
 	github.com/minio/minio-go/v7 v7.0.63
 	github.com/pkg/errors v0.9.1
@@ -21,7 +22,6 @@ require (
 	cloud.google.com/go/compute/metadata v0.2.3 // indirect
 	cloud.google.com/go/iam v0.13.0 // indirect
 	github.com/apache/arrow/go/arrow v0.0.0-20200730104253-651201b0f516 // indirect
-	github.com/apache/thrift v0.16.0 // indirect
 	github.com/bobg/gcsobj v0.1.2 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect

@@ -153,7 +153,6 @@ func CreateExportCommand() (*cobra.Command, error) {
 						if err != nil {
 							panic(errors.Wrap(err, "[NewLocalFileWriter]"))
 						}
-
 						s3Client, err := s3_utils.NewS3Client(logger, s3conf)
 						if err != nil {
 							panic(errors.Wrap(err, "Unable to init s3 client"))

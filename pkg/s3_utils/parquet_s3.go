@@ -58,7 +58,7 @@ func NewS3FileWriterWithClient(
 		pipeReader: pr,
 		pipeWriter: pw,
 	}
-	log.Info("minio file create func called")
+	// log.Info("minio file create func called")
 	return file.Create(key)
 }
 
@@ -81,6 +81,7 @@ func (s *MinioFile) Seek(offset int64, whence int) (int64, error) {
 		return 0, errWhence
 	}
 
+	// log.Infof("seek function called offset and whence is before seek: %d, %d", offset, whence)
 	if s.fileSize > 0 {
 		switch whence {
 		case io.SeekStart:
@@ -98,24 +99,43 @@ func (s *MinioFile) Seek(offset int64, whence int) (int64, error) {
 			}
 		}
 	}
-
-	s.offset = offset
+	o, err := s.downloader.Seek(offset, whence)
+	if err != nil {
+		return 0, err
+	}
+	s.offset = o
 	s.whence = whence
-	return s.offset, nil
+	// log.Infof("offset and whence is after seek: %d, %d", s.offset, s.whence)
+	return offset, nil
 }
 
 // Read up to len(p) bytes into p and return the number of bytes read
 func (s *MinioFile) Read(p []byte) (n int, err error) {
+	// log.Infof("read: file size and offset is: %d, %d", s.fileSize, s.offset)
 	if s.fileSize > 0 && s.offset >= s.fileSize {
 		return 0, io.EOF
 	}
 
+	// log.Info("calling readAt")
 	bytesDownloaded, err := s.downloader.ReadAt(p, s.offset)
-	if err != nil {
+	if err != nil && err != io.EOF {
+		log.Errorf("unable to read miniofile: %w", err)
 		return 0, err
 	}
+	// log.Infof("read: bytesDownloaded after readat is: %d", bytesDownloaded)
+
+	// if bytesDownloaded == 0 {
+	// log.Info("calling read")
+	// bytesDownloaded, err := s.downloader.Read(p)
+	// if err != nil && err != io.EOF {
+	// 	log.Errorf("unable to read miniofile: %w", err)
+	// 	return 0, err
+	// }
+	// log.Infof("read: bytesDownloaded after read is: %d", bytesDownloaded)
+	// }
 
 	s.offset += int64(bytesDownloaded)
+	// log.Infof("read: s.offset after read is: %d", s.offset)
 	return bytesDownloaded, err
 }
 
@@ -164,8 +184,8 @@ func (s *MinioFile) Open(name string) (source.ParquetFile, error) {
 	if err != nil {
 		return pf, err
 	}
-	s.downloader = downloader
-	s.fileSize = info.Size
+	pf.downloader = downloader
+	pf.fileSize = info.Size
 	return pf, nil
 }
 

@@ -73,7 +73,8 @@ func (i *Importer) Run(cfg kafka_utils.Config) error {
 		select {
 		case message, ok := <-messageChn:
 			if !ok {
-				break
+				log.Infof("kafka message restored successfully")
+				return nil
 			}
 			err := i.producer.Produce(&message, i.deliveryChan)
 			if err != nil {
@@ -82,7 +83,7 @@ func (i *Importer) Run(cfg kafka_utils.Config) error {
 
 		case offsetMessage, ok := <-offsetChan:
 			if !ok {
-				continue
+				break
 			}
 			cfg.GroupId = offsetMessage.Group
 			consumer, err := kafka_utils.NewConsumer(cfg)
